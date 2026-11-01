@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Proteinregal</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+/* Layout: one-column list of product cards, sticky header with person + actions, bottom sheet for detail/edit, full-screen scanner overlay. */
+:root{
+  --bg:#f6f4ee; --surface:#ffffff; --fg:#1d1c19; --muted:#6b675c; --line:#dcd8cc;
+  --accent:#4f6f1f; --accent-fg:#ffffff; --accent-soft:#e6ecd6;
+  --good:#2f7d4a; --warn:#b4731a; --bad:#b3342c;
+  --font:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+  --bg:#161614; --surface:#1f1f1c; --fg:#ebe8df; --muted:#9a968a; --line:#33322d;
+  --accent:#9ec45a; --accent-fg:#141a08; --accent-soft:#2a3319;
+  --good:#6fc48a; --warn:#e0a24a; --bad:#e26a60; color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#161614; --surface:#1f1f1c; --fg:#ebe8df; --muted:#9a968a; --line:#33322d;
+  --accent:#9ec45a; --accent-fg:#141a08; --accent-soft:#2a3319;
+  --good:#6fc48a; --warn:#e0a24a; --bad:#e26a60; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.45 var(--font);-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer;border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 12px}
+button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);font-weight:600}
+button.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+input,select,textarea{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+.label{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);
+  padding-block:10px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.hrow{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.hrow h1{font-size:18px;margin:0;font-weight:600;flex:1 1 auto}
+.hrow select{width:auto;max-width:150px;padding:6px 8px}
+.toolbar{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
+.toolbar select{flex:1 1 150px;width:auto}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{font-size:12px;padding:3px 8px;border:1px solid var(--line);border-radius:999px;background:var(--surface)}
+.chip.on{background:var(--accent-soft);border-color:var(--accent)}
+
+main{padding-block:12px 80px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-direction:column;gap:10px;max-width:760px;margin-inline:auto}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start;min-width:0}
+.rank{font-family:var(--mono);font-size:22px;line-height:1;color:var(--muted);width:30px;text-align:right;padding-top:2px}
+.card .body{min-width:0}
+.card .name{font-weight:600;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .sub{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.badges{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.badge{font-family:var(--mono);font-size:11px;padding:2px 6px;border-radius:4px;border:1px solid var(--line)}
+.badge.g-a,.badge.g-b,.badge.nova-1{color:var(--good);border-color:var(--good)}
+.badge.g-c,.badge.nova-2,.badge.nova-3{color:var(--warn);border-color:var(--warn)}
+.badge.g-d,.badge.g-e,.badge.nova-4{color:var(--bad);border-color:var(--bad)}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:6px 10px;margin-top:8px}
+.stat .label{font-size:10px}
+.stat .v{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+.score{font-family:var(--mono);font-size:20px;text-align:right;line-height:1}
+.score small{display:block;font-size:10px;color:var(--muted);letter-spacing:.06em}
+.empty{text-align:center;padding:40px 16px;color:var(--muted)}
+.empty b{display:block;color:var(--fg);margin-bottom:6px}
+
+.fab{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(16px + env(safe-area-inset-bottom,0px));z-index:6;
+  background:var(--accent);color:var(--accent-fg);border:none;border-radius:999px;padding:14px 20px;font-weight:600;font-size:15px;box-shadow:0 6px 18px rgba(0,0,0,.25)}
+
+.sheet{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.45);display:flex;align-items:flex-end}
+.sheet .panel{background:var(--bg);width:100%;max-height:92%;overflow:auto;border-radius:14px 14px 0 0;
+  padding-block:12px calc(16px + env(safe-area-inset-bottom,0px));padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.panel h2{font-size:17px;margin:4px 0 2px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.rowbtns{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+.rowbtns button{flex:1 1 auto}
+.stars{display:flex;gap:4px}
+.stars button{padding:6px 0;flex:1;font-family:var(--mono)}
+.stars button.on{background:var(--accent-soft);border-color:var(--accent)}
+.prodimg{width:72px;height:72px;object-fit:contain;background:var(--surface);border:1px solid var(--line);border-radius:8px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
+.kv dt{color:var(--muted)} .kv dd{margin:0;font-family:var(--mono)}
+.weights{display:grid;grid-template-columns:1fr auto;gap:8px 12px;align-items:center}
+.weights input[type=range]{width:100%;padding:0}
+hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+
+#scanner{position:fixed;inset:0;z-index:30;background:#000;display:flex;flex-direction:column}
+#scanner video{flex:1;width:100%;object-fit:cover}
+#scanner .bar{position:absolute;left:0;right:0;bottom:0;padding:16px max(16px,env(safe-area-inset-right,0px)) calc(16px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));
+  display:flex;gap:8px;background:linear-gradient(transparent,rgba(0,0,0,.7))}
+#scanner .bar button{color:#fff;background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.4)}
+#scanner .hint{position:absolute;top:calc(16px + env(safe-area-inset-top,0px));left:0;right:0;text-align:center;color:#fff;font-size:13px;text-shadow:0 1px 3px #000}
+#scanner .frame{position:absolute;left:12%;right:12%;top:38%;height:22%;border:2px solid rgba(255,255,255,.8);border-radius:8px;pointer-events:none}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(80px + env(safe-area-inset-bottom,0px));z-index:40;background:var(--fg);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:13px;max-width:90%}
+@media (prefers-reduced-motion:no-preference){ .sheet .panel{animation:up .18s ease-out} @keyframes up{from{transform:translateY(30px);opacity:.6}} }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hrow">
+    <h1>Proteinregal</h1>
+    <select id="person" aria-label="Person"></select>
+    <button id="btnPeople" class="ghost" title="Personen">👤</button>
+    <button id="btnWeights" title="Gewichtung">⚖︎</button>
+    <button id="btnKey" class="ghost" title="App-Passwort">🔒</button>
+    <button id="btnRefresh" class="ghost" title="Neu laden">↻</button>
+  </div>
+  <div class="toolbar">
+    <select id="sort" aria-label="Sortierung"></select>
+    <button id="btnFilter">Filter</button>
+    <input id="q" type="search" placeholder="Suche" style="flex:1 1 120px;width:auto">
+  </div>
+  <div class="chips" id="chips"></div>
+</header>
+
+<main id="list"></main>
+
+<button class="fab" id="btnScan">▦ Scannen</button>
+
+<div id="scanner" hidden>
+  <video id="video" playsinline muted autoplay></video>
+  <div class="frame"></div>
+  <div class="hint" id="scanHint">Barcode in den Rahmen halten</div>
+  <div class="bar">
+    <button id="btnManual">EAN eintippen</button>
+    <button id="btnStopScan">Abbrechen</button>
+  </div>
+</div>
+
+<div id="sheetHost"></div>
+<div id="toastHost"></div>
+
+<script>
+// ───────────────────────── Konfiguration ─────────────────────────
+// Supabase-Zugang eintragen. Leer lassen = Daten nur lokal im Browser (zum Testen).
+const SUPABASE_URL = "https://kcebwosggouzlwpuzeal.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtjZWJ3b3NnZ291emx3cHV6ZWFsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM1MzMyNjUsImV4cCI6MjEwOTEwOTI2NX0.vFMlTA3w5okmOuoBrqxJcsryzCNoPHm9kReFtPBPqmA";
+
+// Kriterien. Ein neues Kriterium = ein Eintrag hier (+ ggf. Spalte in products).
+// get: Wert aus Produkt (+ aktueller Person). dir: 1 = höher besser, -1 = niedriger besser.
+const CRITERIA = [
+  { key:"protein_per_kcal", label:"Protein / 100 kcal", unit:"g",  dir: 1, fmt:v=>f1(v), get:p=>p.kcal_100g>0 && p.protein_100g!=null ? p.protein_100g/p.kcal_100g*100 : null },
+  { key:"protein_per_eur",  label:"Protein / €",       unit:"g",  dir: 1, fmt:v=>f0(v), get:p=>p.price_eur>0 && p.net_weight_g>0 && p.protein_100g!=null ? p.protein_100g*p.net_weight_g/100/p.price_eur : null },
+  { key:"price_per_kg",     label:"Preis / kg",        unit:"€",  dir:-1, fmt:v=>f2(v), get:p=>p.price_eur>0 && p.net_weight_g>0 ? p.price_eur/(p.net_weight_g/1000) : null },
+  { key:"taste",            label:"Geschmack",         unit:"/5", dir: 1, fmt:v=>f0(v), get:p=>p._taste ?? null },
+  { key:"versatility",      label:"Vielseitigkeit",    unit:"/5", dir: 1, fmt:v=>f0(v), get:p=>p.versatility ?? null },
+  { key:"nova",             label:"NOVA",              unit:"",   dir:-1, fmt:v=>f0(v), get:p=>p.nova_group ?? null },
+  { key:"co2",              label:"CO₂ / 100 g",       unit:"g",  dir:-1, fmt:v=>f0(v), get:p=>p.co2_g_100g ?? null },
+  { key:"kcal",             label:"kcal / 100 g",      unit:"",   dir:-1, fmt:v=>f0(v), get:p=>p.kcal_100g ?? null },
+];
+const DEFAULT_WEIGHTS = { protein_per_kcal:2, protein_per_eur:2, price_per_kg:1, taste:2, versatility:1, nova:1, co2:1, kcal:0 };
+
+// ───────────────────────── Hilfen ─────────────────────────
+const $ = s=>document.querySelector(s);
+const nf = (d)=>new Intl.NumberFormat("de-DE",{minimumFractionDigits:d,maximumFractionDigits:d});
+const f0=v=>v==null?"–":nf(0).format(v), f1=v=>v==null?"–":nf(1).format(v), f2=v=>v==null?"–":nf(2).format(v);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const uid=()=>crypto.randomUUID ? crypto.randomUUID() : (Date.now().toString(36)+Math.random().toString(36).slice(2));
+function ls(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.parse(v);}catch{return d;} }
+function lsSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
+function toast(msg,ms=2200){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; $("#toastHost").appendChild(t); setTimeout(()=>t.remove(),ms); }
+function fail(prefix,e){ console.error(e); if(e&&e.needKey){ openKey(); return; } toast(prefix+": "+(e&&e.message||e),4000); }
+function num(v){ if(v==null||v==="") return null; const n=typeof v==="number"?v:parseFloat(String(v).replace(",",".")); return isNaN(n)?null:n; }
+
+// ───────────────────────── Datenspeicher ─────────────────────────
+// Gleiche Schnittstelle für Supabase und localStorage.
+const localStore = {
+  async listProducts(){ return ls("fr_products",[]); },
+  async upsertProduct(p){ const all=ls("fr_products",[]); const i=all.findIndex(x=>x.id===p.id); if(i>=0) all[i]=p; else all.push(p); lsSet("fr_products",all); return p; },
+  async deleteProduct(id){ lsSet("fr_products",ls("fr_products",[]).filter(x=>x.id!==id)); lsSet("fr_ratings",ls("fr_ratings",[]).filter(r=>r.product_id!==id)); },
+  async listPeople(){ return ls("fr_people",[]); },
+  async addPerson(name){ const p={id:uid(),name}; lsSet("fr_people",[...ls("fr_people",[]),p]); return p; },
+  async listRatings(){ return ls("fr_ratings",[]); },
+  async setRating(product_id,person_id,taste){ const all=ls("fr_ratings",[]).filter(r=>!(r.product_id===product_id&&r.person_id===person_id)); if(taste!=null) all.push({product_id,person_id,taste}); lsSet("fr_ratings",all); },
+};
+function makeSupaStore(){
+  const appKey = ls("fr_appkey","");
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { global:{ headers: appKey ? {"x-app-key":appKey} : {} } });
+  const chk = ({data,error})=>{
+    if(error){ if(error.code==="42501"||/row-level security/i.test(error.message||"")) { const e=new Error("App-Passwort fehlt oder falsch"); e.needKey=true; throw e; } throw error; }
+    return data; };
+  return {
+    async listProducts(){ return chk(await sb.from("products").select("*").order("created_at")); },
+    async upsertProduct(p){ const {_taste,...row}=p; return chk(await sb.from("products").upsert(row,{onConflict:"id"}).select().single()); },
+    async deleteProduct(id){ chk(await sb.from("products").delete().eq("id",id)); },
+    async listPeople(){ return chk(await sb.from("people").select("*").order("name")); },
+    async addPerson(name){ return chk(await sb.from("people").insert({name}).select().single()); },
+    async listRatings(){ return chk(await sb.from("ratings").select("*")); },
+    async setRating(product_id,person_id,taste){
+      if(taste==null) chk(await sb.from("ratings").delete().match({product_id,person_id}));
+      else chk(await sb.from("ratings").upsert({product_id,person_id,taste},{onConflict:"product_id,person_id"}));
+    },
+  };
+}
+const store = (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase) ? makeSupaStore() : localStore;
+
+// ───────────────────────── Open Food Facts ─────────────────────────
+function parseQuantity(q){
+  if(!q) return null;
+  const m=String(q).toLowerCase().replace(",",".").match(/([\d.]+)\s*(kg|g|l|ml|cl)\b/);
+  if(!m) return null; const n=parseFloat(m[1]);
+  return {kg:n*1000,g:n,l:n*1000,ml:n,cl:n*10}[m[2]];
+}
+async function lookupOFF(ean){
+  const fields="product_name,product_name_de,brands,quantity,product_quantity,product_quantity_unit,nutriments,nova_group,ecoscore_grade,ecoscore_data,environmental_score_grade,environmental_score_data,categories_tags,image_front_small_url";
+  const r=await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(ean)}.json?fields=${fields}`);
+  const j=await r.json().catch(()=>null);
+  if(!j||j.status!==1||!j.product) return null;
+  const p=j.product, n=p.nutriments||{};
+  let w=num(p.product_quantity); const u=(p.product_quantity_unit||"g").toLowerCase();
+  if(w!=null){ if(u==="kg"||u==="l") w*=1000; if(u==="cl") w*=10; }
+  if(w==null) w=parseQuantity(p.quantity);
+  const eco=p.environmental_score_data||p.ecoscore_data||{};
+  const co2kg=num(eco.agribalyse?.co2_total);
+  const grade=(p.environmental_score_grade||p.ecoscore_grade||eco.grade||"").toLowerCase()||null;
+  return {
+    name:p.product_name_de||p.product_name||"", brand:p.brands||"", quantity:p.quantity||"",
+    net_weight_g:w, kcal_100g:num(n["energy-kcal_100g"]), protein_100g:num(n.proteins_100g),
+    fat_100g:num(n.fat_100g), carbs_100g:num(n.carbohydrates_100g),
+    nova_group:num(p.nova_group), eco_grade:grade&&/^[a-e]$/.test(grade)?grade:null,
+    co2_g_100g:co2kg!=null?co2kg*100:null,
+    categories:(p.categories_tags||[]).map(t=>t.replace(/^[a-z]{2}:/,"")).slice(0,6).join(", "),
+    image_url:p.image_front_small_url||null,
+  };
+}
+
+// ───────────────────────── Zustand ─────────────────────────
+let products=[], people=[], ratings=[];
+let weights={...DEFAULT_WEIGHTS,...ls("fr_weights",{})};
+let filters=ls("fr_filters",{});
+let sortKey=ls("fr_sort","score");
+let personId=ls("fr_person",null);
+
+async function loadAll(){
+  try{ [products,people,ratings]=await Promise.all([store.listProducts(),store.listPeople(),store.listRatings()]); }
+  catch(e){ console.error(e); toast("Laden fehlgeschlagen: "+(e.message||e)); }
+  if(!people.length && store===localStore){ people=[await store.addPerson("Ich")]; }
+  if(!personId||!people.find(p=>p.id===personId)) personId=people[0]?.id??null;
+  renderPerson(); render();
+}
+function tasteOf(p,pid=personId){ return ratings.find(r=>r.product_id===p.id&&r.person_id===pid)?.taste ?? null; }
+function enrich(){ for(const p of products){ p._taste=tasteOf(p); } }
+
+function computeScores(list){
+  const active=CRITERIA.filter(c=>(weights[c.key]||0)>0);
+  const ranges={};
+  for(const c of active){ const vs=list.map(c.get).filter(v=>v!=null); if(vs.length>1) ranges[c.key]=[Math.min(...vs),Math.max(...vs)]; }
+  for(const p of list){
+    let s=0,wsum=0;
+    for(const c of active){ const v=c.get(p), r=ranges[c.key]; if(v==null||!r||r[1]===r[0]) continue;
+      let n=(v-r[0])/(r[1]-r[0]); if(c.dir<0) n=1-n; s+=n*weights[c.key]; wsum+=weights[c.key]; }
+    p._score=wsum?Math.round(s/wsum*100):null;
+  }
+}
+function applyFilters(list){
+  const q=(filters.q||"").toLowerCase();
+  return list.filter(p=>{
+    if(q && !`${p.name} ${p.brand} ${p.categories}`.toLowerCase().includes(q)) return false;
+    for(const c of CRITERIA){ const v=c.get(p);
+      const mn=num(filters["min_"+c.key]), mx=num(filters["max_"+c.key]);
+      if(mn!=null && (v==null||v<mn)) return false;
+      if(mx!=null && (v==null||v>mx)) return false; }
+    if(filters.eco && (!p.eco_grade || p.eco_grade>filters.eco)) return false;
+    return true;
+  });
+}
+function sorted(list){
+  const c=CRITERIA.find(c=>c.key===sortKey);
+  return [...list].sort((a,b)=>{
+    const va=c?c.get(a):a._score, vb=c?c.get(b):b._score;
+    if(va==null&&vb==null) return 0; if(va==null) return 1; if(vb==null) return -1;
+    return (c?c.dir:1)<0 ? va-vb : vb-va;
+  });
+}
+
+// ───────────────────────── Rendering ─────────────────────────
+function renderPerson(){
+  $("#person").innerHTML=people.map(p=>`<option value="${esc(p.id)}" ${p.id===personId?"selected":""}>${esc(p.name)}</option>`).join("")||`<option value="">–</option>`;
+  const s=$("#sort"); if(!s.options.length){
+    s.innerHTML=`<option value="score">Gesamtscore</option>`+CRITERIA.map(c=>`<option value="${c.key}">${esc(c.label)}</option>`).join("");
+  } s.value=sortKey;
+}
+function renderChips(){
+  const chips=[];
+  for(const c of CRITERIA){ const mn=filters["min_"+c.key], mx=filters["max_"+c.key];
+    if(mn!=null&&mn!=="") chips.push(`${c.label} ≥ ${mn}`); if(mx!=null&&mx!=="") chips.push(`${c.label} ≤ ${mx}`); }
+  if(filters.eco) chips.push(`Eco ≥ ${filters.eco.toUpperCase()}`);
+  $("#chips").innerHTML=chips.map(t=>`<span class="chip on">${esc(t)}</span>`).join("")+(chips.length?`<button class="chip" id="clearF">× alle</button>`:"");
+  $("#clearF")?.addEventListener("click",()=>{ filters={q:filters.q}; lsSet("fr_filters",filters); render(); });
+}
+function render(){
+  enrich(); computeScores(products);
+  const list=sorted(applyFilters(products));
+  renderChips();
+  const host=$("#list");
+  if(!products.length){ host.innerHTML=`<div class="empty"><b>Noch nichts gescannt.</b>Scannen tippen, Barcode vor die Kamera. Nährwerte, NOVA und CO₂ kommen von Open Food Facts; Preis und Geschmack trägst du ein.</div>`; return; }
+  if(!list.length){ host.innerHTML=`<div class="empty"><b>Kein Treffer.</b>Filter lockern.</div>`; return; }
+  host.innerHTML=list.map((p,i)=>{
+    const show=CRITERIA.filter(c=>c.key!=="kcal").slice(0,6);
+    return `<article class="card" data-id="${esc(p.id)}">
+      <div class="rank">${i+1}</div>
+      <div class="body">
+        <p class="name">${esc(p.name||"(ohne Name)")}</p>
+        <div class="sub">${esc([p.brand,p.quantity].filter(Boolean).join(" · "))}</div>
+        <div class="badges">
+          ${p.nova_group?`<span class="badge nova-${p.nova_group}">NOVA ${p.nova_group}</span>`:""}
+          ${p.eco_grade?`<span class="badge g-${p.eco_grade}">Eco ${p.eco_grade.toUpperCase()}</span>`:""}
+          ${p._taste?`<span class="badge">${"★".repeat(p._taste)}${"☆".repeat(5-p._taste)}</span>`:`<span class="badge muted">kein Geschmack</span>`}
+          ${p.price_eur==null?`<span class="badge muted">kein Preis</span>`:""}
+        </div>
+        <div class="stats">${show.map(c=>`<div class="stat"><div class="label">${esc(c.label)}</div><div class="v">${c.fmt(c.get(p))}${c.get(p)!=null&&c.unit?" "+c.unit:""}</div></div>`).join("")}</div>
+      </div>
+      <div class="score">${p._score==null?"–":p._score}<small>SCORE</small></div>
+    </article>`;
+  }).join("");
+  host.querySelectorAll(".card").forEach(el=>el.addEventListener("click",()=>openDetail(products.find(p=>p.id===el.dataset.id))));
+}
+
+// ───────────────────────── Sheets ─────────────────────────
+function sheet(html){
+  const h=$("#sheetHost"); h.innerHTML=`<div class="sheet"><div class="panel">${html}</div></div>`;
+  h.querySelector(".sheet").addEventListener("click",e=>{ if(e.target.classList.contains("sheet")) closeSheet(); });
+  return h.querySelector(".panel");
+}
+function closeSheet(){ $("#sheetHost").innerHTML=""; }
+
+function openDetail(p,isNew=false){
+  const t=tasteOf(p);
+  const el=sheet(`
+    <div style="display:flex;gap:12px;align-items:flex-start">
+      ${p.image_url?`<img class="prodimg" src="${esc(p.image_url)}" alt="">`:`<div class="prodimg"></div>`}
+      <div style="min-width:0;flex:1">
+        <h2>${isNew?"Neu: ":""}${esc(p.name||"(ohne Name)")}</h2>
+        <div class="muted">${esc([p.brand,p.quantity].filter(Boolean).join(" · "))} · <span class="num">${esc(p.ean||"")}</span></div>
+      </div>
+    </div>
+    <dl class="kv" style="margin-top:10px">
+      <dt>kcal / 100 g</dt><dd>${f0(p.kcal_100g)}</dd>
+      <dt>Protein / 100 g</dt><dd>${f1(p.protein_100g)} g</dd>
+      <dt>Fett · KH / 100 g</dt><dd>${f1(p.fat_100g)} · ${f1(p.carbs_100g)} g</dd>
+      <dt>NOVA</dt><dd>${f0(p.nova_group)}</dd>
+      <dt>Eco-Score</dt><dd>${p.eco_grade?p.eco_grade.toUpperCase():"–"}</dd>
+      <dt>CO₂ / 100 g</dt><dd>${f0(p.co2_g_100g)} g</dd>
+      <dt>Kategorien</dt><dd style="font-family:var(--font)">${esc(p.categories||"–")}</dd>
+    </dl>
+    <hr>
+    <div class="grid2">
+      <label class="field"><span class="label">Name</span><input id="f_name" value="${esc(p.name||"")}"></label>
+      <label class="field"><span class="label">Marke</span><input id="f_brand" value="${esc(p.brand||"")}"></label>
+      <label class="field"><span class="label">Preis (€)</span><input id="f_price" type="number" step="0.01" inputmode="decimal" value="${p.price_eur??""}"></label>
+      <label class="field"><span class="label">Inhalt (g / ml)</span><input id="f_w" type="number" step="1" inputmode="decimal" value="${p.net_weight_g??""}"></label>
+      ${p.kcal_100g==null?`<label class="field"><span class="label">kcal / 100 g</span><input id="f_kcal" type="number" inputmode="decimal"></label>
+      <label class="field"><span class="label">Protein / 100 g</span><input id="f_prot" type="number" step="0.1" inputmode="decimal"></label>`:""}
+    </div>
+    <div class="field" style="margin-top:10px"><span class="label">Geschmack (${esc(people.find(x=>x.id===personId)?.name||"?")})</span>
+      <div class="stars" id="stars">${[1,2,3,4,5].map(n=>`<button data-n="${n}" class="${t===n?"on":""}">${n}</button>`).join("")}</div></div>
+    <div class="field" style="margin-top:10px"><span class="label">Vielseitigkeit</span>
+      <div class="stars" id="vers">${[1,2,3,4,5].map(n=>`<button data-n="${n}" class="${p.versatility===n?"on":""}">${n}</button>`).join("")}</div></div>
+    <label class="field" style="margin-top:10px"><span class="label">Notiz</span><textarea id="f_notes" rows="2">${esc(p.notes||"")}</textarea></label>
+    ${people.length>1?`<div class="muted" style="margin-top:8px;font-size:12px">Andere: ${people.filter(x=>x.id!==personId).map(x=>`${esc(x.name)} ${tasteOf(p,x.id)??"–"}`).join(" · ")}</div>`:""}
+    <div class="rowbtns">
+      <button class="primary" id="save">Speichern</button>
+      <button id="refetch">OFF neu laden</button>
+      ${isNew?"":`<button id="del" style="color:var(--bad)">Löschen</button>`}
+      <button class="ghost" id="cancel">Schließen</button>
+    </div>`);
+  let taste=t, vers=p.versatility??null;
+  el.querySelectorAll("#stars button").forEach(b=>b.addEventListener("click",()=>{ const n=+b.dataset.n; taste=taste===n?null:n; el.querySelectorAll("#stars button").forEach(x=>x.classList.toggle("on",+x.dataset.n===taste)); }));
+  el.querySelectorAll("#vers button").forEach(b=>b.addEventListener("click",()=>{ const n=+b.dataset.n; vers=vers===n?null:n; el.querySelectorAll("#vers button").forEach(x=>x.classList.toggle("on",+x.dataset.n===vers)); }));
+  el.querySelector("#cancel").addEventListener("click",closeSheet);
+  el.querySelector("#save").addEventListener("click",async()=>{
+    p.name=$("#f_name").value.trim(); p.brand=$("#f_brand").value.trim();
+    p.price_eur=num($("#f_price").value); p.net_weight_g=num($("#f_w").value);
+    if($("#f_kcal")){ p.kcal_100g=num($("#f_kcal").value); p.protein_100g=num($("#f_prot").value); }
+    p.versatility=vers; p.notes=$("#f_notes").value.trim(); p.updated_at=new Date().toISOString();
+    try{
+      const saved=await store.upsertProduct(p); Object.assign(p,saved);
+      if(isNew) products.push(p);
+      if(personId){ await store.setRating(p.id,personId,taste); ratings=await store.listRatings(); }
+      closeSheet(); render(); toast("Gespeichert");
+    }catch(e){ fail("Speichern fehlgeschlagen",e); }
+  });
+  el.querySelector("#refetch").addEventListener("click",async()=>{
+    toast("Frage Open Food Facts…"); const d=await lookupOFF(p.ean).catch(()=>null);
+    if(!d){ toast("Nicht bei OFF gefunden"); return; }
+    const keep={id:p.id,ean:p.ean,price_eur:p.price_eur,versatility:p.versatility,notes:p.notes,created_at:p.created_at};
+    Object.assign(p,d,keep); if(d.net_weight_g==null&&keep.net_weight_g) p.net_weight_g=keep.net_weight_g;
+    openDetail(p,isNew);
+  });
+  el.querySelector("#del")?.addEventListener("click",async()=>{
+    if(el.querySelector("#del").dataset.armed){ try{ await store.deleteProduct(p.id); }catch(e){ fail("Löschen fehlgeschlagen",e); return; } products=products.filter(x=>x.id!==p.id); closeSheet(); render(); toast("Gelöscht"); }
+    else { el.querySelector("#del").dataset.armed="1"; el.querySelector("#del").textContent="Wirklich löschen?"; }
+  });
+}
+
+function openFilters(){
+  const el=sheet(`<h2>Filter</h2>
+    <div class="grid2">${CRITERIA.map(c=>`
+      <label class="field"><span class="label">${esc(c.label)} min</span><input data-f="min_${c.key}" type="number" step="any" inputmode="decimal" value="${filters["min_"+c.key]??""}"></label>
+      <label class="field"><span class="label">${esc(c.label)} max</span><input data-f="max_${c.key}" type="number" step="any" inputmode="decimal" value="${filters["max_"+c.key]??""}"></label>`).join("")}
+      <label class="field"><span class="label">Eco-Score mindestens</span><select data-f="eco"><option value="">egal</option>${["a","b","c","d","e"].map(g=>`<option value="${g}" ${filters.eco===g?"selected":""}>${g.toUpperCase()}</option>`).join("")}</select></label>
+    </div>
+    <div class="rowbtns"><button class="primary" id="apply">Anwenden</button><button id="reset">Zurücksetzen</button></div>`);
+  el.querySelector("#apply").addEventListener("click",()=>{
+    el.querySelectorAll("[data-f]").forEach(i=>{ const v=i.value; if(v==="") delete filters[i.dataset.f]; else filters[i.dataset.f]=v; });
+    lsSet("fr_filters",filters); closeSheet(); render();
+  });
+  el.querySelector("#reset").addEventListener("click",()=>{ filters={q:filters.q}; lsSet("fr_filters",filters); closeSheet(); render(); });
+}
+function openWeights(){
+  const el=sheet(`<h2>Gewichtung Gesamtscore</h2><p class="muted" style="margin-top:0">0 = ignorieren. Jedes Kriterium wird über alle Produkte auf 0–100 normiert, dann gewichtet gemittelt. Fehlende Werte zählen nicht.</p>
+    <div class="weights">${CRITERIA.map(c=>`<label class="field"><span class="label">${esc(c.label)} ${c.dir<0?"(niedriger = besser)":""}</span><input type="range" min="0" max="3" step="1" data-w="${c.key}" value="${weights[c.key]??0}"></label><span class="num" id="w_${c.key}">${weights[c.key]??0}</span>`).join("")}</div>
+    <div class="rowbtns"><button class="primary" id="ok">Fertig</button><button id="std">Standard</button></div>`);
+  el.querySelectorAll("[data-w]").forEach(r=>r.addEventListener("input",()=>{ weights[r.dataset.w]=+r.value; el.querySelector("#w_"+r.dataset.w).textContent=r.value; lsSet("fr_weights",weights); render(); }));
+  el.querySelector("#ok").addEventListener("click",closeSheet);
+  el.querySelector("#std").addEventListener("click",()=>{ weights={...DEFAULT_WEIGHTS}; lsSet("fr_weights",weights); closeSheet(); render(); });
+}
+function openKey(){
+  const el=sheet(`<h2>App-Passwort</h2><p class="muted" style="margin-top:0">Zum Schreiben in die geteilte Datenbank. Wird nur auf diesem Gerät gespeichert.</p>
+    <input id="appkey" type="password" autocomplete="off" value="${esc(ls("fr_appkey",""))}">
+    <div class="rowbtns"><button class="primary" id="ok">Speichern &amp; neu laden</button><button class="ghost" id="c">Abbrechen</button></div>`);
+  el.querySelector("#c").addEventListener("click",closeSheet);
+  el.querySelector("#ok").addEventListener("click",()=>{ lsSet("fr_appkey",$("#appkey").value.trim()); location.reload(); });
+  $("#appkey").focus();
+}
+function openPeople(){
+  const el=sheet(`<h2>Personen</h2>
+    <ul style="padding-left:18px">${people.map(p=>`<li>${esc(p.name)}</li>`).join("")||"<li class='muted'>keine</li>"}</ul>
+    <label class="field"><span class="label">Neue Person</span><input id="np" placeholder="Name"></label>
+    <div class="rowbtns"><button class="primary" id="add">Hinzufügen</button><button class="ghost" id="cl">Schließen</button></div>`);
+  el.querySelector("#cl").addEventListener("click",closeSheet);
+  el.querySelector("#add").addEventListener("click",async()=>{ const n=$("#np").value.trim(); if(!n) return;
+    try{ const p=await store.addPerson(n); people.push(p); personId=p.id; lsSet("fr_person",personId); renderPerson(); closeSheet(); render(); }
+    catch(e){ fail("Fehler",e); } });
+}
+
+// ───────────────────────── Scanner ─────────────────────────
+let stream=null, zx=null, rafStop=false;
+async function startScan(){
+  $("#scanner").hidden=false; rafStop=false;
+  const v=$("#video");
+  try{
+    if("BarcodeDetector" in window){
+      const fmts=await BarcodeDetector.getSupportedFormats().catch(()=>[]);
+      if(fmts.includes("ean_13")){
+        stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}}});
+        v.srcObject=stream; await v.play();
+        const det=new BarcodeDetector({formats:["ean_13","ean_8","upc_a","upc_e"]});
+        let last=0;
+        const loop=async(ts)=>{ if(rafStop) return; if(ts-last>120&&v.readyState>=2){ last=ts; try{ const r=await det.detect(v); if(r.length){ onCode(r[0].rawValue); return; } }catch{} } requestAnimationFrame(loop); };
+        requestAnimationFrame(loop); return;
+      }
+    }
+    const hints=new Map(); hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E]);
+    zx=new ZXing.BrowserMultiFormatReader(hints,300);
+    await zx.decodeFromConstraints({video:{facingMode:{ideal:"environment"}}},v,(res)=>{ if(res) onCode(res.getText()); });
+  }catch(e){ console.error(e); stopScan(); toast("Kamera nicht verfügbar: "+(e.message||e),4000); }
+}
+function stopScan(){
+  rafStop=true; $("#scanner").hidden=true;
+  if(zx){ try{zx.reset();}catch{} zx=null; }
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  $("#video").srcObject=null;
+}
+async function onCode(code){
+  stopScan(); if(navigator.vibrate) navigator.vibrate(60);
+  await handleEAN(code.replace(/\D/g,""));
+}
+async function handleEAN(ean){
+  if(!ean){ toast("Kein gültiger Code"); return; }
+  const existing=products.find(p=>p.ean===ean);
+  if(existing){ openDetail(existing); return; }
+  toast("Frage Open Food Facts…");
+  const d=await lookupOFF(ean).catch(e=>{ console.error(e); return null; });
+  const p={id:uid(),ean,created_at:new Date().toISOString(),name:"",brand:"",quantity:"",net_weight_g:null,kcal_100g:null,protein_100g:null,fat_100g:null,carbs_100g:null,nova_group:null,eco_grade:null,co2_g_100g:null,categories:"",image_url:null,price_eur:null,versatility:null,notes:"",...(d||{})};
+  if(!d) toast("Nicht bei OFF — bitte manuell ergänzen",3000);
+  openDetail(p,true);
+}
+
+// ───────────────────────── Events ─────────────────────────
+$("#btnScan").addEventListener("click",startScan);
+$("#btnStopScan").addEventListener("click",stopScan);
+$("#btnManual").addEventListener("click",()=>{ stopScan(); const el=sheet(`<h2>EAN eingeben</h2><input id="ean" inputmode="numeric" placeholder="z. B. 4000417025005"><div class="rowbtns"><button class="primary" id="go">Suchen</button><button class="ghost" id="c">Abbrechen</button></div>`);
+  el.querySelector("#c").addEventListener("click",closeSheet); el.querySelector("#go").addEventListener("click",()=>{ const v=$("#ean").value; closeSheet(); handleEAN(v.replace(/\D/g,"")); }); $("#ean").focus(); });
+$("#btnFilter").addEventListener("click",openFilters);
+$("#btnWeights").addEventListener("click",openWeights);
+$("#btnPeople").addEventListener("click",openPeople);
+$("#btnRefresh").addEventListener("click",loadAll);
+$("#btnKey").addEventListener("click",openKey);
+$("#sort").addEventListener("change",e=>{ sortKey=e.target.value; lsSet("fr_sort",sortKey); render(); });
+$("#person").addEventListener("change",e=>{ personId=e.target.value; lsSet("fr_person",personId); render(); });
+$("#q").value=filters.q||""; $("#q").addEventListener("input",e=>{ filters.q=e.target.value; lsSet("fr_filters",filters); render(); });
+document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closeSheet(); if(!$("#scanner").hidden) stopScan(); } });
+
+if(store===localStore) console.info("Proteinregal: kein Supabase konfiguriert, Daten nur lokal.");
+loadAll();
+</script>
+</body>
+</html>
