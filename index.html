@@ -99,7 +99,8 @@ hr{border:0;border-top:1px solid var(--line);margin:14px 0}
 #scanner .bar button{color:#fff;background:rgba(255,255,255,.15);border-color:rgba(255,255,255,.4)}
 #scanner .hint{position:absolute;top:calc(16px + env(safe-area-inset-top,0px));left:0;right:0;text-align:center;color:#fff;font-size:13px;text-shadow:0 1px 3px #000}
 #scanner .frame{position:absolute;left:12%;right:12%;top:38%;height:22%;border:2px solid rgba(255,255,255,.8);border-radius:8px;pointer-events:none}
-.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(80px + env(safe-area-inset-bottom,0px));z-index:40;background:var(--fg);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:13px;max-width:90%}
+#toastHost{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(80px + env(safe-area-inset-bottom,0px));z-index:40;display:flex;flex-direction:column;gap:6px;align-items:center;max-width:90%;pointer-events:none}
+.toast{background:var(--fg);color:var(--bg);padding:10px 14px;border-radius:8px;font-size:13px}
 @media (prefers-reduced-motion:no-preference){ .sheet .panel{animation:up .18s ease-out} @keyframes up{from{transform:translateY(30px);opacity:.6}} }
 </style>
 </head>
@@ -169,6 +170,8 @@ function ls(k,d){ try{ const v=localStorage.getItem(k); return v==null?d:JSON.pa
 function lsSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch{} }
 function toast(msg,ms=2200){ const t=document.createElement("div"); t.className="toast"; t.textContent=msg; $("#toastHost").appendChild(t); setTimeout(()=>t.remove(),ms); }
 function fail(prefix,e){ console.error(e); if(e&&e.needKey){ openKey(); return; } toast(prefix+": "+(e&&e.message||e),4000); }
+const KEY_TTL_MS = 7*24*60*60*1000;
+function getAppKey(){ const k=ls("fr_appkey",null); if(!k||typeof k!=="object") return ""; if(Date.now()-k.ts>KEY_TTL_MS){ try{localStorage.removeItem("fr_appkey");}catch{} return ""; } return k.v||""; }
 function num(v){ if(v==null||v==="") return null; const n=typeof v==="number"?v:parseFloat(String(v).replace(",",".")); return isNaN(n)?null:n; }
 
 // ───────────────────────── Datenspeicher ─────────────────────────
@@ -183,7 +186,7 @@ const localStore = {
   async setRating(product_id,person_id,taste){ const all=ls("fr_ratings",[]).filter(r=>!(r.product_id===product_id&&r.person_id===person_id)); if(taste!=null) all.push({product_id,person_id,taste}); lsSet("fr_ratings",all); },
 };
 function makeSupaStore(){
-  const appKey = ls("fr_appkey","");
+  const appKey = getAppKey();
   const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { global:{ headers: appKey ? {"x-app-key":appKey} : {} } });
   const chk = ({data,error})=>{
     if(error){ if(error.code==="42501"||/row-level security/i.test(error.message||"")) { const e=new Error("App-Passwort fehlt oder falsch"); e.needKey=true; throw e; } throw error; }
@@ -356,10 +359,10 @@ function openDetail(p,isNew=false){
     <div class="grid2">
       <label class="field"><span class="label">Name</span><input id="f_name" value="${esc(p.name||"")}"></label>
       <label class="field"><span class="label">Marke</span><input id="f_brand" value="${esc(p.brand||"")}"></label>
-      <label class="field"><span class="label">Preis (€)</span><input id="f_price" type="number" step="0.01" inputmode="decimal" value="${p.price_eur??""}"></label>
-      <label class="field"><span class="label">Inhalt (g / ml)</span><input id="f_w" type="number" step="1" inputmode="decimal" value="${p.net_weight_g??""}"></label>
-      ${p.kcal_100g==null?`<label class="field"><span class="label">kcal / 100 g</span><input id="f_kcal" type="number" inputmode="decimal"></label>
-      <label class="field"><span class="label">Protein / 100 g</span><input id="f_prot" type="number" step="0.1" inputmode="decimal"></label>`:""}
+      <label class="field"><span class="label">Preis (€)</span><input id="f_price" type="text" inputmode="decimal" placeholder="z. B. 2,49" value="${p.price_eur??""}"></label>
+      <label class="field"><span class="label">Inhalt (g / ml)</span><input id="f_w" type="text" inputmode="decimal" value="${p.net_weight_g??""}"></label>
+      ${p.kcal_100g==null?`<label class="field"><span class="label">kcal / 100 g</span><input id="f_kcal" type="text" inputmode="decimal"></label>
+      <label class="field"><span class="label">Protein / 100 g</span><input id="f_prot" type="text" inputmode="decimal"></label>`:""}
     </div>
     <div class="field" style="margin-top:10px"><span class="label">Geschmack (${esc(people.find(x=>x.id===personId)?.name||"?")})</span>
       <div class="stars" id="stars">${[1,2,3,4,5].map(n=>`<button data-n="${n}" class="${t===n?"on":""}">${n}</button>`).join("")}</div></div>
@@ -405,8 +408,8 @@ function openDetail(p,isNew=false){
 function openFilters(){
   const el=sheet(`<h2>Filter</h2>
     <div class="grid2">${CRITERIA.map(c=>`
-      <label class="field"><span class="label">${esc(c.label)} min</span><input data-f="min_${c.key}" type="number" step="any" inputmode="decimal" value="${filters["min_"+c.key]??""}"></label>
-      <label class="field"><span class="label">${esc(c.label)} max</span><input data-f="max_${c.key}" type="number" step="any" inputmode="decimal" value="${filters["max_"+c.key]??""}"></label>`).join("")}
+      <label class="field"><span class="label">${esc(c.label)} min</span><input data-f="min_${c.key}" type="text" inputmode="decimal" value="${filters["min_"+c.key]??""}"></label>
+      <label class="field"><span class="label">${esc(c.label)} max</span><input data-f="max_${c.key}" type="text" inputmode="decimal" value="${filters["max_"+c.key]??""}"></label>`).join("")}
       <label class="field"><span class="label">Eco-Score mindestens</span><select data-f="eco"><option value="">egal</option>${["a","b","c","d","e"].map(g=>`<option value="${g}" ${filters.eco===g?"selected":""}>${g.toUpperCase()}</option>`).join("")}</select></label>
     </div>
     <div class="rowbtns"><button class="primary" id="apply">Anwenden</button><button id="reset">Zurücksetzen</button></div>`);
@@ -425,11 +428,11 @@ function openWeights(){
   el.querySelector("#std").addEventListener("click",()=>{ weights={...DEFAULT_WEIGHTS}; lsSet("fr_weights",weights); closeSheet(); render(); });
 }
 function openKey(){
-  const el=sheet(`<h2>App-Passwort</h2><p class="muted" style="margin-top:0">Zum Schreiben in die geteilte Datenbank. Wird nur auf diesem Gerät gespeichert.</p>
-    <input id="appkey" type="password" autocomplete="off" value="${esc(ls("fr_appkey",""))}">
+  const el=sheet(`<h2>App-Passwort</h2><p class="muted" style="margin-top:0">Zum Schreiben in die geteilte Datenbank. Bleibt 7 Tage auf diesem Gerät gespeichert.</p>
+    <input id="appkey" type="password" autocomplete="off" value="${esc(getAppKey())}">
     <div class="rowbtns"><button class="primary" id="ok">Speichern &amp; neu laden</button><button class="ghost" id="c">Abbrechen</button></div>`);
   el.querySelector("#c").addEventListener("click",closeSheet);
-  el.querySelector("#ok").addEventListener("click",()=>{ lsSet("fr_appkey",$("#appkey").value.trim()); location.reload(); });
+  el.querySelector("#ok").addEventListener("click",()=>{ const v=$("#appkey").value.trim(); if(v) lsSet("fr_appkey",{v,ts:Date.now()}); else { try{localStorage.removeItem("fr_appkey");}catch{} } location.reload(); });
   $("#appkey").focus();
 }
 function openPeople(){
@@ -502,7 +505,7 @@ $("#q").value=filters.q||""; $("#q").addEventListener("input",e=>{ filters.q=e.t
 document.addEventListener("keydown",e=>{ if(e.key==="Escape"){ closeSheet(); if(!$("#scanner").hidden) stopScan(); } });
 
 if(store===localStore) console.info("Proteinregal: kein Supabase konfiguriert, Daten nur lokal.");
-loadAll();
+loadAll().then(()=>{ if(store!==localStore && !getAppKey()) openKey(); });
 </script>
 </body>
 </html>
